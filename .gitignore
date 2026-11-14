@@ -1,5 +1,7 @@
 config.json
 host.log
+publish_log.txt
+publish.ps1
 __pycache__/
 *.pyc
 *.jpg
@@ -8,3 +10,5 @@ bridge/src/*/bin/
 bridge/src/*/obj/
 bridge/harness/bin/
 bridge/harness/obj/
+push_only.ps1
+start_push_task.ps1
