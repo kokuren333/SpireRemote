@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>SpireBridge</AssemblyName>
+    <RootNamespace>SpireBridge</RootNamespace>
+    <!-- The mod DLL is loaded by the game itself; do not copy game assemblies. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <EnableDefaultItems>true</EnableDefaultItems>
+  </PropertyGroup>
+
+  <!--
+    Game install location (PC). Override on the command line, e.g.:
+      dotnet build -p:Sts2GameDir="D:\Games\Slay the Spire 2"
+    or via the STS2_GAME_DIR environment variable in build.ps1.
+  -->
+  <PropertyGroup>
+    <Sts2GameDir Condition="'$(Sts2GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</Sts2GameDir>
+    <Sts2ManagedDir Condition="'$(Sts2ManagedDir)' == ''">$(Sts2GameDir)\data_sts2_windows_x86_64</Sts2ManagedDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Private=false: use the game's own copies at runtime, never bundle them. -->
+    <Reference Include="sts2">
+      <HintPath>$(Sts2ManagedDir)\sts2.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GodotSharp">
+      <HintPath>$(Sts2ManagedDir)\GodotSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

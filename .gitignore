@@ -1,0 +1,10 @@
+config.json
+host.log
+__pycache__/
+*.pyc
+*.jpg
+bridge/dist/
+bridge/src/*/bin/
+bridge/src/*/obj/
+bridge/harness/bin/
+bridge/harness/obj/

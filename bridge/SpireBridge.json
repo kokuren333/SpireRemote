@@ -1,0 +1,1 @@
+{"affects_gameplay":false,"author":"kokuren","description":"Local HTTP API bridge for Slay the Spire 2 (SpireRemote). Loopback only.","has_dll":true,"has_pck":false,"id":"SpireBridge","min_game_version":"0.113.0","name":"SpireBridge","version":"0.2.0"}
