@@ -77,11 +77,16 @@ def publish_frame(jpeg, rect):
             LAT["pending"] = None
 
 def encode_jpeg(img):
-    """Encode to JPEG, stepping quality down until the frame fits the budget."""
+    """Encode to JPEG, stepping quality down until the frame fits the budget.
+
+    subsampling=1 (4:2:2) instead of the PIL default 4:2:0: measured on a real
+    frame at 1152w it costs one quality step (q48->q40) within the 45KB budget
+    but doubles chroma resolution, which the game's saturated reds/blues need.
+    4:4:4 would force q24 and is not worth the luma loss."""
     data = None
     for q in JPEG_Q_STEPS:
         buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=q)
+        img.save(buf, "JPEG", quality=q, subsampling=1)
         data = buf.getvalue()
         if len(data) <= JPEG_MAX_BYTES:
             break
@@ -387,6 +392,10 @@ def _wgc_start(hwnd):
                     if a.ndim == 3 and a.shape[2] == 4:
                         if a.shape[1] != frame.width:
                             a = a[:, :frame.width, :]
+                        # WGC frame_buffer is BGRA byte order. Feeding it to
+                        # PIL as "RGBA" swaps red and blue (red energy orb
+                        # rendered blue). Reorder to RGBA explicitly.
+                        a = a[:, :, (2, 1, 0, 3)]
                         img = Image.fromarray(np.ascontiguousarray(a), "RGBA").convert("RGB")
                 except Exception:
                     img = None
