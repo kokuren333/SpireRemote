@@ -12,3 +12,4 @@ bridge/harness/bin/
 bridge/harness/obj/
 push_only.ps1
 start_push_task.ps1
+push_log.txt
