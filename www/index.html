@@ -108,22 +108,63 @@
     background:#20242b; color:#f0ead2; padding:9px 16px; border-radius:999px; font-size:13px; opacity:0; pointer-events:none;
     transition:all .25s; max-width:92vw; text-align:center; z-index:60;}
   #toast.show{opacity:.96; transform:translateX(-50%) translateY(0);}
-  /* ---------- fullscreen overlay ---------- */
-  #fs{position:fixed; inset:0; background:#000; display:none; z-index:50;}
+  /* ---------- fullscreen overlay (Switch-emu style, landscape) ---------- */
+  #fs{position:fixed; inset:0; width:100vw; width:100dvw; height:100vh; height:100dvh;
+    background:#000; display:none; z-index:50; overflow:hidden;}
   #fs.open{display:block;}
-  #fsimg{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; touch-action:none;}
-  #fsbar{position:absolute; left:0; right:0; bottom:0; display:flex; align-items:center; gap:6px; flex-wrap:wrap;
-    padding:8px 10px calc(8px + env(safe-area-inset-bottom)); background:linear-gradient(0deg, rgba(0,0,0,.72), transparent);}
-  #fsbar .sp{flex:1;}
-  .fsbtn{border:2px solid rgba(255,255,255,.55); background:rgba(20,22,28,.65); color:#fff; border-radius:999px;
-    padding:9px 13px; font-size:13px; font-weight:700; cursor:pointer; backdrop-filter:blur(3px);}
-  .fsbtn:active{background:rgba(60,64,78,.8);}
-  .fsbtn.round{width:44px; height:44px; border-radius:50%; padding:0; font-size:16px;}
-  #fsnums{display:flex; gap:4px; flex-wrap:wrap;}
-  #fsnums button{width:34px; height:38px; border-radius:8px; border:2px solid rgba(255,255,255,.4);
-    background:rgba(20,22,28,.6); color:#fff; font-size:14px; font-weight:800; cursor:pointer;}
-  #fsnums button:active{background:rgba(90,96,115,.8);}
-  #fsclose{position:absolute; top:calc(8px + env(safe-area-inset-top)); right:10px;}
+  #fsimg{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; touch-action:none; background:#000;}
+  .fsbtn{border:2px solid rgba(255,255,255,.45); background:rgba(18,20,26,.5); color:#fff; border-radius:999px;
+    padding:9px 13px; font-size:13px; font-weight:700; cursor:pointer; backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);}
+  .fsbtn:active{background:rgba(70,76,95,.65);}
+  .fsbtn.round{width:42px; height:42px; border-radius:50%; padding:0; font-size:16px;}
+  #fstop{position:absolute; top:calc(8px + env(safe-area-inset-top)); right:calc(10px + env(safe-area-inset-right));
+    display:flex; gap:8px; z-index:3;}
+  /* portrait hint chip (non-blocking) */
+  #fsrot{display:none; position:absolute; top:calc(12px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
+    background:rgba(10,12,16,.6); color:#fff; font-size:12px; font-weight:700; padding:6px 14px; border-radius:999px;
+    pointer-events:none; z-index:3; white-space:nowrap; backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);}
+  @media (orientation: portrait){
+    #fsrot{display:block; animation:fsrotfade 6s ease forwards;}
+  }
+  @keyframes fsrotfade{0%,70%{opacity:1;} 100%{opacity:0;}}
+  /* translucent D-pad, bottom-left */
+  #fsdpad{position:absolute; left:calc(12px + env(safe-area-inset-left)); bottom:calc(16px + env(safe-area-inset-bottom));
+    display:grid; grid-template-columns:repeat(3, 46px); grid-template-rows:repeat(3, 46px); z-index:2;
+    filter:drop-shadow(0 2px 4px rgba(0,0,0,.4));}
+  #fsdpad button{background:rgba(18,20,26,.5); border:1.5px solid rgba(255,255,255,.35); color:rgba(255,255,255,.92);
+    font-size:16px; cursor:pointer; padding:0; backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);}
+  #fsdpad button:active{background:rgba(80,88,110,.65);}
+  #fsdpad .up{grid-area:1/2; border-radius:10px 10px 0 0;}
+  #fsdpad .left{grid-area:2/1; border-radius:10px 0 0 10px;}
+  #fsdpad .center{grid-area:2/2;}
+  #fsdpad .right{grid-area:2/3; border-radius:0 10px 10px 0;}
+  #fsdpad .down{grid-area:3/2; border-radius:0 0 10px 10px;}
+  /* translucent round buttons, bottom-right */
+  #fsab{position:absolute; right:calc(12px + env(safe-area-inset-right)); bottom:calc(16px + env(safe-area-inset-bottom));
+    display:flex; align-items:flex-end; gap:10px; z-index:2;}
+  .fsabwrap{display:flex; flex-direction:column; align-items:center; gap:2px;}
+  .fsabbtn{width:56px; height:56px; border-radius:50%; border:2px solid rgba(255,255,255,.45);
+    background:rgba(165,28,77,.45); color:#fff; font-size:19px; font-weight:900; cursor:pointer;
+    backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); box-shadow:0 3px 6px rgba(0,0,0,.35);}
+  .fsabbtn:active{background:rgba(165,28,77,.75); transform:translateY(2px);}
+  .fsabbtn.util{background:rgba(18,20,26,.5); font-size:16px;}
+  .fsabbtn.util:active{background:rgba(70,76,95,.65);}
+  .fsablabel{font-size:10px; font-weight:700; color:rgba(255,255,255,.85); text-shadow:0 1px 2px rgba(0,0,0,.8);}
+  /* card number strip, bottom center, horizontally scrollable */
+  #fsnums{position:absolute; bottom:calc(10px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+    display:flex; gap:4px; max-width:44vw; overflow-x:auto; overflow-y:hidden; z-index:2;
+    padding:2px; scrollbar-width:none; -webkit-overflow-scrolling:touch;}
+  #fsnums::-webkit-scrollbar{display:none;}
+  #fsnums button{flex:none; width:34px; height:38px; border-radius:8px; border:2px solid rgba(255,255,255,.4);
+    background:rgba(18,20,26,.5); color:#fff; font-size:14px; font-weight:800; cursor:pointer;
+    backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);}
+  #fsnums button:active{background:rgba(90,96,115,.7);}
+  @media (orientation: portrait){
+    #fsnums{max-width:62vw;}
+    #fsdpad{grid-template-columns:repeat(3, 42px); grid-template-rows:repeat(3, 42px); bottom:calc(64px + env(safe-area-inset-bottom));}
+    #fsab{bottom:calc(64px + env(safe-area-inset-bottom));}
+    .fsabbtn{width:50px; height:50px;}
+  }
   /* ---------- short screens: compact deck ---------- */
   @media (max-height: 720px){
     .secttl{display:none;}
@@ -218,14 +259,24 @@
 
   <div id="fs">
     <img id="fsimg" alt="ゲーム画面（全画面）">
-    <button class="fsbtn round" id="fsclose">✕</button>
-    <div id="fsbar">
-      <button class="fsbtn" id="fsB">B もどる</button>
-      <button class="fsbtn" id="fsA">A 決定</button>
-      <button class="fsbtn" id="fsE">E 終了</button>
-      <div class="sp"></div>
-      <div id="fsnums"></div>
+    <div id="fstop">
+      <button class="fsbtn round" id="fsaudio" title="サウンド ON/OFF">🔇</button>
+      <button class="fsbtn round" id="fsclose" title="全画面を閉じる">✕</button>
     </div>
+    <div id="fsrot">📱 横持ちがおすすめです</div>
+    <div id="fsdpad">
+      <button class="up" data-key="up">▲</button>
+      <button class="left" data-key="left">◀</button>
+      <button class="center" disabled></button>
+      <button class="right" data-key="right">▶</button>
+      <button class="down" data-key="down">▼</button>
+    </div>
+    <div id="fsab">
+      <div class="fsabwrap"><button class="fsabbtn util" id="fsE">E</button><span class="fsablabel">終了</span></div>
+      <div class="fsabwrap"><button class="fsabbtn" id="fsB">B</button><span class="fsablabel">もどる</span></div>
+      <div class="fsabwrap"><button class="fsabbtn" id="fsA">A</button><span class="fsablabel">決定</span></div>
+    </div>
+    <div id="fsnums"></div>
   </div>
 
   <div id="toast"></div>
@@ -325,18 +376,19 @@ async function poll(){
 }
 /* ---------- audio (PC sound via WASAPI loopback -> MP3 stream) ---------- */
 let audioEl = null, audioOn = false;
+function setAudioIcon(t){ $("audiobtn").textContent = t; const fa = $("fsaudio"); if(fa) fa.textContent = t; }
 $("audiobtn").addEventListener("click", () => {
   if(!audioOn){
     if(!audioEl){ audioEl = new Audio(); audioEl.playsInline = true; audioEl.preload = "auto"; }
     audioEl.src = API_BASE + "api/audio?t=" + encodeURIComponent(TOKEN);
     audioEl.play().then(() => {
-      audioOn = true; $("audiobtn").textContent = "🔊";
+      audioOn = true; setAudioIcon("🔊");
       showToast("サウンドON（PCの音が出ます）");
     }).catch(() => { showToast("音声を開始できませんでした"); });
   } else {
     audioOn = false;
     if(audioEl){ audioEl.pause(); audioEl.removeAttribute("src"); audioEl.load(); }
-    $("audiobtn").textContent = "🔇";
+    setAudioIcon("🔇");
     showToast("サウンドOFF");
   }
 });
@@ -448,6 +500,7 @@ function closeFs(){
 }
 $("fsbtn").addEventListener("click", openFs);
 $("fsclose").addEventListener("click", closeFs);
+$("fsaudio").addEventListener("click", () => $("audiobtn").click());
 $("fsA").addEventListener("click", () => sendKey("enter"));
 $("fsB").addEventListener("click", () => sendKey("escape"));
 $("fsE").addEventListener("click", () => sendKey("e"));

@@ -573,6 +573,20 @@ class AudioHub:
                 self.running = False
 
     def _teardown(self):
+        # Runs ONLY in the _run thread (from its finally). Never touch the
+        # PortAudio stream from any other thread: closing it while _run is
+        # blocked in stream.read() crashed the whole host with 0xC0000005.
+        try:
+            if self._ffmpeg is not None:
+                if self._ffmpeg.stdin:
+                    self._ffmpeg.stdin.close()
+                try:
+                    self._ffmpeg.wait(timeout=3)
+                except Exception:
+                    self._ffmpeg.terminate()
+        except Exception:
+            pass
+        self._ffmpeg = None
         try:
             if self._stream is not None:
                 self._stream.stop_stream()
@@ -580,14 +594,6 @@ class AudioHub:
         except Exception:
             pass
         self._stream = None
-        try:
-            if self._ffmpeg is not None:
-                if self._ffmpeg.stdin:
-                    self._ffmpeg.stdin.close()
-                self._ffmpeg.terminate()
-        except Exception:
-            pass
-        self._ffmpeg = None
         try:
             if self._pa is not None:
                 self._pa.terminate()
@@ -604,13 +610,9 @@ class AudioHub:
                 idle = (not self.clients) and self.last_gone and (time.time() - self.last_gone > 30)
             if idle:
                 log("audio idle 30s; stopping capture")
+                # Only raise the flag: _run notices within one read cycle
+                # (~43ms) and tears everything down in its own thread.
                 self.stop_flag = True
-                try:
-                    if self._stream is not None:
-                        self._stream.stop_stream()
-                        self._stream.close()
-                except Exception:
-                    pass
                 return
 
 AUDIO = AudioHub()
