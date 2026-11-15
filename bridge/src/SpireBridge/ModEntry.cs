@@ -24,7 +24,7 @@ public static class ModEntry
             // Running inside the game from here on: Godot logging is safe.
             // (GD.Print outside the engine crashes natively — see BridgeLog.)
             BridgeLog.UseGodotLogging = true;
-            BridgeLog.Info("[SpireBridge] Initializing SpireBridge 0.3.0");
+            BridgeLog.Info("[SpireBridge] Initializing SpireBridge 0.4.0");
 
             // Capture the game thread's SynchronizationContext before any
             // HTTP handler can run; all game API access is marshaled

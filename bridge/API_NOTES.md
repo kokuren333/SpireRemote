@@ -1,4 +1,4 @@
-# STS2 API ノート — ゲーム本体 DLL 公開 API 調査（SpireBridge 実装担当向け）
+# STS2 API ノート — ゲーム本体 DLL 公開 API 調査（SpireBridge v0.4.0）
 
 - 調査日: 2026-11-15
 - 対象ビルド: **v0.113.1**（`release_info.json`: version=v0.113.1 / branch=v0.113.1 / commit=d09d48e5 / date=2026-11-14。先行調査時の v0.113.0 から更新済み）
@@ -1039,3 +1039,89 @@ description, a `/fixtures/card_selection` response, and a `--card-selection`
 mode exposing that state through /state with no /actions. Invalid display-only
 actions are rejected. Use `--port` for an isolated client-test instance; do not
 start the default port while the real bridge is active.
+
+## 14. Round 3 metadata preflight (2026-11-16, v0.4.0)
+
+Read-only reflection via tools/Inspect; no getters invoked, no game objects constructed.
+Outputs: round3-game.txt, round3-godot.txt, round3-transforms.txt. Confirmed NRun.Instance (NRun), CombatRoom (NCombatRoom); NCreature : Control with Entity (Creature), Hitbox (Control); Creature.IsAlive (bool). Confirmed Control.Size/GetGlobalRect, CanvasItem.GetGlobalTransformWithCanvas/IsVisibleInTree, Node.IsInsideTree/GetViewport/GetTree/GetChildCount/GetChild, SceneTree.Root (Window), Window.Size (Vector2I), Viewport.GetFinalTransform, and Transform2D multiplication by Transform2D/Vector2/Rect2. IsVisibleInTree belongs to CanvasItem, not Node. Hitbox exists, so it is preferred; null Hitbox falls back to NCreature. Conversion: final viewport transform × canvas-inclusive global transform × local Control rectangle (Vector2.Zero, Size). This includes canvas/final viewport transforms and avoids applying the global transform twice. These signatures are metadata/compile verified only; client pixel alignment awaits B-13 runtime checks.
+
+### v0.4.0 implemented contract (B-1 through B-12)
+
+Round 2 version references above are historical. Current assembly, manifest,
+startup log and /health report 0.4.0. This is staging only at
+`<this bridge folder>\dist\SpireBridge\`, not a mods deployment.
+The coordinator owns deployment at the next game startup. No running game,
+bridge, live host or mods folder was operated on for this work.
+
+| DTO | Added JSON key | Type and source |
+|---|---|---|
+| EnemyInfo | label | string/null; Creature reference identity table |
+| EnemyInfo | pos | object/null; x/y center and w/h size normalized to full window client area |
+| EnemyInfo | alive | bool/null; guarded Creature.IsAlive |
+| ChoiceInfo | enabled | bool/null; event=!IsLocked, rest=IsEnabled, otherwise null |
+| ActionInfo | target_index | int/null; unchanged CombatState.Enemies array index |
+| ActionInfo | target_label | string/null; same enemy label as state |
+
+```json
+{"enemies":[
+  {"index":0,"name":"スライム","hp":20,"max_hp":24,"block":2,"intent":"攻撃 7","label":"A","pos":{"x":0.6120,"y":0.5480,"w":0.1100,"h":0.2600},"alive":true},
+  {"index":1,"name":"スライム","hp":24,"max_hp":24,"block":0,"intent":"防御 5","label":"B","pos":null,"alive":true}
+]}
+```
+
+```json
+{"action_id":"play_card:1:1","kind":"play_card","label":"ストライク -> B スライム","target":"スライム","target_index":1,"target_label":"B"}
+```
+
+All old keys/types/index semantics and /do resolution remain. Null keys are
+serialized, not omitted. Event/rest lock suffixes remain. D-3 correction:
+targeted action text uses ASCII ` -> `, target is the enemy name; without a
+label text falls back to `name -> enemy name`. Untargeted labels stay unchanged
+and target_index/target_label are null. Clients derive enemy index from the
+third action_id component, not label/target. The alternate /do numeric target
+input is unchanged and differs from the /actions target output.
+
+EnemyLabelState uses ReferenceEqualityComparer and stores CombatState identity,
+Creature identities and next number. Combat reference change or leaving combat
+clears state/references. Only new identities are sorted by pos.x, missing pos
+last, then array index. Labels run A..Z, A2..Z2, A3...; existing labels never
+change within combat, even after movement/death/disappearance. Labels are
+assigned after position reads, with one provider table shared by state/actions
+and the same Built used to form each snapshot's action text.
+
+EnemyPositionAccess bounds CombatRoom traversal to depth 8 / 2000 nodes and
+requires exactly one Entity reference match. The implemented conversion is
+`root.GetFinalTransform() * rectNode.GetGlobalTransformWithCanvas()` applied to
+`Rect2(Vector2.Zero, rectNode.Size)` (Hitbox, or NCreature when Hitbox is null).
+Normalize divides the resulting client-pixel rectangle by root Window.Size,
+computes its center, rejects out-of-range centers before rounding and rounds
+center/size to four decimals. Trailing decimal zeros need not appear in JSON.
+
+B-6 position null conditions, in order:
+
+1. Zero or multiple matching NCreature nodes.
+2. Creature or rectangle control outside the tree or invisible in tree.
+3. Either control's viewport differs from SceneTree.Root, or root window size is nonpositive.
+4. Nonfinite computed inputs/results or nonpositive rectangle dimensions.
+5. Center outside 0..1 before rounding (no clamping).
+6. alive=false.
+7. Traversal exceeds either limit: every enemy position is null.
+8. Exceptions: individual failures affect that enemy only; traversal failures affect all positions.
+
+New reads use the existing GameThread.Invoke/Build path and guarded nullable
+values. Missing reads do not produce guessed coordinates. Metadata availability
+and a warning-free compile are the only engine-side proof so far. Managed
+EnemyChecks covers sorting/reference stability/removal/late arrival/reset/rollover,
+normalizer finite/bounds checks and action text; it runs before HARNESS_READY.
+Default harness still returns real unknown/empty fallback and
+game_thread_unavailable; --fixture is the previous card_selection fixture;
+--fixture-v4 exercises populated/null DTO keys and enabled true/false/null
+through the production HTTP serializer. Python relay checks use owned OS-assigned
+ports only. Fake paired fixtures: combat_v4, combat_v3, event and rewards under
+/fixtures; /fixtures/card_selection retains its prior state-only shape.
+
+Explicitly unverified in the running game: coordinate alignment across window
+sizes/aspect ratios, first combat snapshot position availability, Enemies
+compaction/alive transitions on death, labels for summons, and A/D/F opening
+draw/discard/exhaust piles. DESIGN.md lists B-13 checks ①–⑤ for the next startup.
+Current measured command output and hashes: `uiv2/hb_ledger.md`.

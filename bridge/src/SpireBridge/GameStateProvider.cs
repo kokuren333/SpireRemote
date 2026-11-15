@@ -16,6 +16,7 @@ namespace SpireBridge;
 /// </summary>
 public sealed class GameStateProvider : IStateProvider
 {
+    private readonly EnemyLabelState _enemyLabels = new();
     public StateSnapshot GetState()
     {
         var r = GameThread.Invoke(() => Build().Snapshot);
@@ -60,6 +61,7 @@ public sealed class GameStateProvider : IStateProvider
         {
             if (!GameAccess.TryGetRun(out var runState, out var player) || runState == null)
             {
+                _enemyLabels.Assign(null, Array.Empty<(object, int, double?)>());
                 snap.Screen = "main_menu";
                 return built;
             }
@@ -74,6 +76,7 @@ public sealed class GameStateProvider : IStateProvider
 
             var combatState = GameAccess.GetCombatState();
             bool inCombat = combatState != null;
+            if (!inCombat) _enemyLabels.Assign(null, Array.Empty<(object, int, double?)>());
 
             // ---- player ------------------------------------------------------
             Creature? playerCreature = null;
@@ -182,8 +185,24 @@ public sealed class GameStateProvider : IStateProvider
                         MaxHp = GameAccess.SafeInt(() => enemy.MaxHp),
                         Block = GameAccess.SafeInt(() => enemy.Block),
                         Intent = ResolveIntent(enemy),
+                        Alive = GameAccess.SafeBool(() => enemy.IsAlive),
                     });
                 }
+            }
+
+            // Additions must never discard the existing snapshot or actions.
+            if (combatState != null)
+            {
+                try
+                {
+                    var positions = EnemyPositionAccess.Read(enemies, snap.Enemies);
+                    for (int i = 0; i < snap.Enemies.Count; i++) snap.Enemies[i].Pos = positions[i];
+                    var labels = _enemyLabels.Assign(combatState,
+                        enemies.Select((enemy, i) => ((object)enemy, i, snap.Enemies[i].Pos?.X)));
+                    for (int i = 0; i < snap.Enemies.Count; i++)
+                        snap.Enemies[i].Label = labels.TryGetValue(enemies[i], out var label) ? label : null;
+                }
+                catch { /* nullable additions remain unavailable */ }
             }
 
             // ---- potions --------------------------------------------------------
@@ -228,7 +247,9 @@ public sealed class GameStateProvider : IStateProvider
                             {
                                 ActionId = $"play_card:{i}:{e}",
                                 Kind = "play_card",
-                                Label = enemyName == null ? cardName : $"{cardName} -> {enemyName}",
+                                Label = EnemyDisplayLogic.TargetedLabel(cardName, enemyName, snap.Enemies[e].Label),
+                                TargetIndex = e,
+                                TargetLabel = snap.Enemies[e].Label,
                                 Target = enemyName,
                             });
                         }
@@ -269,7 +290,9 @@ public sealed class GameStateProvider : IStateProvider
                         {
                             ActionId = $"use_potion:{i}:{e}",
                             Kind = "use_potion",
-                            Label = enemyName == null ? potionName : $"{potionName} -> {enemyName}",
+                            Label = EnemyDisplayLogic.TargetedLabel(potionName, enemyName, snap.Enemies[e].Label),
+                            TargetIndex = e,
+                            TargetLabel = snap.Enemies[e].Label,
                             Target = enemyName,
                         });
                     }
@@ -333,6 +356,7 @@ public sealed class GameStateProvider : IStateProvider
                                 try { locked = opt.IsLocked; } catch { }
                                 if (locked) label = (label ?? "option") + " [locked]";
                                 snap.Choices.Add(new ChoiceInfo { Index = i, Label = label, Kind = "event",
+                                    Enabled = GameAccess.SafeBool(() => !opt.IsLocked),
                                     Description = GameAccess.SafeString(() => opt.Description?.GetFormattedText()) });
                                 choiceModels.Add(opt);
                                 actions.Add(new ActionInfo
@@ -365,6 +389,7 @@ public sealed class GameStateProvider : IStateProvider
                                 try { enabled = opt.IsEnabled; } catch { }
                                 if (!enabled) label = (label ?? "option") + " [disabled]";
                                 snap.Choices.Add(new ChoiceInfo { Index = i, Label = label, Kind = "rest",
+                                    Enabled = GameAccess.SafeBool(() => opt.IsEnabled),
                                     Description = GameAccess.SafeString(() => opt.Description?.GetFormattedText()) });
                                 choiceModels.Add(opt);
                                 actions.Add(new ActionInfo

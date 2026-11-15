@@ -50,6 +50,12 @@ DESIRED_W = 1152      # most recently requested stream width
 JPEG_Q = 62
 JPEG_MAX_BYTES = 45 * 1024   # per-frame size budget; quality steps down to fit
 JPEG_Q_STEPS = (64, 56, 48, 40, 32, 24)
+JPEG_PRESETS = {
+    "fast": (1152, JPEG_MAX_BYTES, JPEG_Q_STEPS),
+    "balanced": (1152, 80 * 1024, (76, 68, 60, 52, 44, 36)),
+    "quality": (1600, 150 * 1024, (84, 76, 68, 60, 52, 44)),
+}
+PRESET = "fast"       # most recently requested quality preset
 FPS = 15              # capture fps while game is running
 INPUT_WAKE = threading.Event()
 LAST_INPUT = {"t": 0.0}
@@ -76,19 +82,20 @@ def publish_frame(jpeg, rect):
             del LAT["frame"][:-20]
             LAT["pending"] = None
 
-def encode_jpeg(img):
+def encode_jpeg(img, preset=None):
     """Encode to JPEG, stepping quality down until the frame fits the budget.
 
     subsampling=1 (4:2:2) instead of the PIL default 4:2:0: measured on a real
     frame at 1152w it costs one quality step (q48->q40) within the 45KB budget
     but doubles chroma resolution, which the game's saturated reds/blues need.
     4:4:4 would force q24 and is not worth the luma loss."""
+    _, budget, qualities = JPEG_PRESETS[PRESET if preset is None else preset]
     data = None
-    for q in JPEG_Q_STEPS:
+    for q in qualities:
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=q, subsampling=1)
         data = buf.getvalue()
-        if len(data) <= JPEG_MAX_BYTES:
+        if len(data) <= budget:
             break
     return data
 
@@ -286,7 +293,8 @@ def mouse_click(px, py, right=False):
 
 VK = {"esc": 0x1B, "escape": 0x1B, "space": 0x20, "e": 0x45, "m": 0x4D,
       "tab": 0x09, "enter": 0x0D, "q": 0x51, "w": 0x57, "up": 0x26,
-      "down": 0x28, "left": 0x25, "right": 0x27}
+      "down": 0x28, "left": 0x25, "right": 0x27,
+      "a": 0x41, "d": 0x44, "f": 0x46}
 for _d in range(1, 10):
     VK[str(_d)] = 0x30 + _d
 VK["0"] = 0x30
@@ -466,7 +474,8 @@ def capture_loop():
                         img = _wgc_client_image(rect)
                     if img is None:
                         img = ImageGrab.grab(bbox=(l, t, r, b), all_screens=True)
-                    target_w = min(img.width, DESIRED_W, MAX_W)
+                    preset = PRESET
+                    target_w = min(img.width, DESIRED_W, JPEG_PRESETS[preset][0])
                     if img.width > target_w:
                         img = img.resize((target_w, max(1, int(img.height * target_w / img.width))), Image.BILINEAR)
                     # cheap change detection on a thumbnail
@@ -481,7 +490,7 @@ def capture_loop():
                         continue
                     if sig is not None:
                         FRAMES.thumb_sig = sig
-                    publish_frame(encode_jpeg(img), rect)
+                    publish_frame(encode_jpeg(img, preset), rect)
             else:
                 if WGC["control"] is not None:
                     try:
@@ -818,6 +827,35 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    # ---- CORS ----
+    # The API stays token-gated and reachable only inside the tailnet; CORS
+    # merely relaxes the browser same-origin policy so a front-end served
+    # from another origin (e.g. a Muse Space artifact) can call this host
+    # at all. Without a valid token every endpoint still answers 401,
+    # CORS headers or not.
+    def _cors(self):
+        origin = self.headers.get("Origin")
+        self.send_header("Access-Control-Allow-Origin", origin if origin else "*")
+        if origin:
+            self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "X-Token, Content-Type")
+        # The frame poller reads these response headers from JS; cross-origin
+        # they stay hidden unless explicitly exposed.
+        self.send_header("Access-Control-Expose-Headers", "X-Frame-Counter, X-Frame-Age-Ms")
+        self.send_header("Access-Control-Max-Age", "86400")
+
+    def end_headers(self):
+        self._cors()
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        # Preflight: browsers send it without credentials, so it must not be
+        # gated on the token. The CORS headers ride along via end_headers().
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _norm(self, raw_path):
         p = urlparse(raw_path).path
         if p.startswith("/spire/"):
@@ -848,7 +886,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        global DESIRED_W
+        global DESIRED_W, PRESET
         path = self._norm(self.path)
         if path in STATIC:
             fname, ctype = STATIC[path]
@@ -888,10 +926,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "unauthorized"}, 401)
             touch_client()
             q = parse_qs(urlparse(self.path).query)
+            requested_preset = q.get("p", ["fast"])[0]
+            PRESET = requested_preset if requested_preset in JPEG_PRESETS else "fast"
+            width_cap = JPEG_PRESETS[PRESET][0]
             since = None
             if "w" in q:
                 try:
-                    DESIRED_W = max(480, min(1152, int(q["w"][0])))
+                    DESIRED_W = max(480, min(width_cap, int(q["w"][0])))
                 except (ValueError, TypeError):
                     pass
             if "since" in q:
@@ -1034,9 +1075,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         received = time.perf_counter()
         path = self._norm(self.path)
-        if not path.startswith("/api/"):
-            return self._json({"ok": False, "error": "not found"}, 404)
-        if not self._authed():
+        if not path.startswith("/api/") or not self._authed():
+            # Drain bounded rejected bodies before closing to avoid a TCP reset.
+            try:
+                length = self.headers.get("Content-Length", "0")
+                n = int(length) if length.isascii() and length.isdecimal() else -1
+            except ValueError:
+                n = -1
+            if 0 <= n <= 64 * 1024:
+                self.rfile.read(n)
+            else:
+                self.close_connection = True
+            if not path.startswith("/api/"):
+                return self._json({"ok": False, "error": "not found"}, 404)
             return self._json({"ok": False, "error": "unauthorized"}, 401)
         touch_client()
         try:

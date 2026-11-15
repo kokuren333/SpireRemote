@@ -92,7 +92,7 @@ public sealed class BridgeHttpServer : IDisposable
                     string? gameVersion = null;
                     try { gameVersion = GameVersion.Get(); }
                     catch { gameVersion = null; }
-                    WriteJson(context, 200, new { ok = true, service = "SpireBridge", version = "0.3.0", game_version = gameVersion });
+                    WriteJson(context, 200, new { ok = true, service = "SpireBridge", version = "0.4.0", game_version = gameVersion });
                     break;
                 }
 

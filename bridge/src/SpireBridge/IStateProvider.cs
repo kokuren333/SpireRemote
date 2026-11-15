@@ -37,6 +37,14 @@ public sealed class CardInfo
     [JsonPropertyName("playable")] public bool? Playable { get; set; }
 }
 
+public sealed class EnemyPosition
+{
+    [JsonPropertyName("x")] public double X { get; set; }
+    [JsonPropertyName("y")] public double Y { get; set; }
+    [JsonPropertyName("w")] public double W { get; set; }
+    [JsonPropertyName("h")] public double H { get; set; }
+}
+
 public sealed class EnemyInfo
 {
     [JsonPropertyName("index")] public int Index { get; set; }
@@ -45,6 +53,9 @@ public sealed class EnemyInfo
     [JsonPropertyName("max_hp")] public int? MaxHp { get; set; }
     [JsonPropertyName("block")] public int? Block { get; set; }
     [JsonPropertyName("intent")] public string? Intent { get; set; }
+    [JsonPropertyName("label")] public string? Label { get; set; }
+    [JsonPropertyName("pos")] public EnemyPosition? Pos { get; set; }
+    [JsonPropertyName("alive")] public bool? Alive { get; set; }
 }
 
 public sealed class PotionInfo
@@ -57,6 +68,7 @@ public sealed class PotionInfo
 
 public sealed class ChoiceInfo
 {
+    [JsonPropertyName("enabled")] public bool? Enabled { get; set; }
     [JsonPropertyName("index")] public int Index { get; set; }
     [JsonPropertyName("label")] public string? Label { get; set; }
     [JsonPropertyName("kind")] public string? Kind { get; set; }
@@ -85,6 +97,8 @@ public sealed class StateSnapshot
 
 public sealed class ActionInfo
 {
+    [JsonPropertyName("target_index")] public int? TargetIndex { get; set; }
+    [JsonPropertyName("target_label")] public string? TargetLabel { get; set; }
     [JsonPropertyName("action_id")] public string ActionId { get; set; } = "";
     [JsonPropertyName("kind")] public string Kind { get; set; } = "";
     [JsonPropertyName("label")] public string? Label { get; set; }

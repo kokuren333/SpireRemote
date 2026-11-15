@@ -85,3 +85,30 @@ powershell -ExecutionPolicy Bypass -File <this bridge folder>\build.ps1
 **ゲームの mods フォルダには一切入れない**（ロードテストは別途調整して実施）。
 
 ゲームのインストール先が違う場合は `-p:Sts2GameDir=...`（csproj のプロパティ）で切り替え可能。
+
+
+## v0.4.0 の追加点（2026-11-16、ビルド済み・ステージングのみ／実機未検証・mods 未配置）
+
+UI v2（敵ラベル A/B/C・対象矢印・選択→確認フロー）のためのフィールド追加。**追加のみ**で、
+既存フィールドの削除・意味変更、敵 index や `/do` の対象解決の変更はない
+（旧クライアント×新ブリッジ、新クライアント×旧ブリッジのどちらも従来どおり動く）。
+
+| 場所 | 追加フィールド | 型・意味 |
+|---|---|---|
+| `enemies[]` | `label` | string/null。戦闘中は個体に固定のラベル（`A`..`Z`、`A2`..）。倒れても繰り上げない。初期割当は画面左→右 |
+| `enemies[]` | `pos` | object/null。`{x,y,w,h}`、配信フレーム（ゲームウィンドウのクライアント領域）基準の 0..1、x/y は中心座標 |
+| `enemies[]` | `alive` | bool/null |
+| `choices[]` | `enabled` | bool/null（event・rest のみ値が入り、それ以外は null） |
+| `actions[]` | `target_index` | int/null。対象の敵の元配列 index |
+| `actions[]` | `target_label` | string/null。対象の敵の `label` |
+
+- **null の扱い**：取得できない値はキーを省略せず明示的に `null` を返す。`pos` は一致する
+  ノードが無い・不可視・座標が 0..1 の外・`alive=false`・例外などの場合に `null`
+  （推測位置は返さない。クライアントは `pos` が無い敵には矢印を描かない）。
+  対象なしアクションの `target_index`／`target_label` も `null`。
+- 対象ありアクションの `label` は `カード名 -> 敵名`（ASCII ` -> `）。クライアントは敵 index を
+  `action_id` の第 3 要素から取り、`label`／`target` の文字列は解析しない。
+- 検証はゲーム外ハーネスと fake ブリッジでの契約テストのみ。**実機では未検証**で、
+  DLL は `dist/` にステージングしただけ（**mods には未配置**）。座標の一致、初回戦闘の
+  スナップショット、敵の死亡・召喚時の挙動などは次回ゲーム起動時に確認する。
+  詳細は [DESIGN.md](DESIGN.md)・[API_NOTES.md](API_NOTES.md) を参照。

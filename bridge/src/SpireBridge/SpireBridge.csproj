@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <AssemblyName>SpireBridge</AssemblyName>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <RootNamespace>SpireBridge</RootNamespace>
     <!-- The mod DLL is loaded by the game itself; do not copy game assemblies. -->
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
