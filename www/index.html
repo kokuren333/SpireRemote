@@ -18,7 +18,9 @@
     --u: 1vmin;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
-  html,body{margin:0; padding:0; height:100%;}
+  html,body{margin:0; padding:0; height:100%; overscroll-behavior:none; overscroll-behavior-x:none;}
+  /* root scroller never moves sideways (body already overflow:hidden; this doubles it on html) */
+  html{overflow-x:hidden; overflow-y:hidden;}
   body{
     font-family:"Hiragino Kaku Gothic ProN","Noto Sans JP",system-ui,sans-serif;
     background:linear-gradient(180deg,var(--shell) 0%,var(--shell2) 100%);
@@ -109,7 +111,7 @@
     background:var(--shell2); color:var(--ink); padding:8px; text-align:left; cursor:pointer;}
   #stscreen{border:1px solid var(--btn-edge); border-radius:999px; padding:1px 6px; font-size:11px;}
   #stconnection{font-size:11px; flex:1; min-width:120px;}
-  #stbody{padding:8px; max-height:32dvh; overflow-y:auto;}
+  #stbody{padding:8px; max-height:32dvh; overflow-y:auto; overflow-x:hidden;}
   #stinfo{white-space:pre-line; font-size:12px; line-height:1.5;}
   #sthand, #stchoices{display:flex; flex-wrap:wrap; gap:6px; margin-top:7px;}
   #statepanel .pillbtn{white-space:normal; border-radius:10px; font-size:12px; text-align:left; max-width:100%;}
@@ -120,7 +122,7 @@
   .sttargets{display:flex; flex-wrap:wrap; gap:4px; margin-top:5px;}
   .sttargets[hidden]{display:none;}
   #sterror{font-size:11px; color:var(--accent2); margin-top:6px;}
-  @media (orientation:portrait){#deck{max-height:55%; overflow-y:auto;} #bezel{min-height:100px;}}
+  @media (orientation:portrait){#deck{max-height:55%; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain;} #bezel{min-height:100px;}}
   /* ---------- letterbox bands over the black bars (never over the picture) ---------- */
   #bandtop,#bandbottom{position:absolute; left:0; right:0; display:none; flex-direction:column; justify-content:center;
     padding:1px 10px; overflow:hidden; pointer-events:none; z-index:2; color:#f4efdc;
@@ -192,7 +194,7 @@
   .fsablabel{font-size:10px; font-weight:700; color:rgba(255,255,255,.85); text-shadow:0 1px 2px rgba(0,0,0,.8);}
   /* card number strip, bottom center, horizontally scrollable */
   #fsnums{position:absolute; bottom:calc(10px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
-    display:flex; gap:4px; max-width:44vw; overflow-x:auto; overflow-y:hidden; z-index:2;
+    display:flex; gap:4px; max-width:44vw; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; z-index:2;
     padding:2px; scrollbar-width:none; -webkit-overflow-scrolling:touch;}
   #fsnums::-webkit-scrollbar{display:none;}
   #fsnums button{flex:none; width:34px; height:38px; border-radius:8px; border:2px solid rgba(255,255,255,.4);
@@ -225,7 +227,7 @@
   @media (orientation: landscape) and (max-height: 540px){
     body{flex-direction:row; align-items:stretch; padding:6px;}
     #main{max-width:none; flex:1 1 auto; min-width:0;}
-    #deck{width:min(42%, 360px); max-width:none; flex:none; height:100%; overflow-y:auto; padding:2px 2px 2px 10px;}
+    #deck{width:min(42%, 360px); max-width:none; flex:none; height:100%; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; padding:2px 2px 2px 10px;}
     #bezel{border-radius:14px;}
     #ssrow{gap:20px;}
   }
