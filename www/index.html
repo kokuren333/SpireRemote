@@ -152,6 +152,8 @@
     <div id="bar">
       <div id="dot"></div>
       <div id="statustext">接続中…</div>
+      <span id="fpsbar" style="font-size:11px; opacity:.7; font-variant-numeric:tabular-nums; flex:none; white-space:nowrap;"></span>
+      <button class="pillbtn icon" id="audiobtn" title="サウンド ON/OFF">🔇</button>
       <button class="pillbtn icon" id="tokenbtn" title="接続トークン">🔑</button>
       <button class="pillbtn icon" id="fsbtn" title="全画面">⛶</button>
       <button class="pillbtn" id="launch">▶ 起動</button>
@@ -284,31 +286,60 @@ $("tokenclear").addEventListener("click", () => {
   try{ localStorage.removeItem("spire_token"); }catch(e){}
   location.href = location.pathname;
 });
-/* ---------- frame polling (works in iOS standalone PWA, unlike MJPEG) ---------- */
+/* ---------- frame long-polling (works in iOS standalone PWA, unlike MJPEG) ----------
+   The server holds ?since=<counter> requests until a newer frame exists
+   (max 1.5s, then 204), so each frame is delivered the moment it is encoded
+   and no bandwidth is wasted re-fetching duplicates. */
 let lastCounter = -1, lastFrameAt = 0, blobUrl = null, polling = false, framesShown = 0, fpsT0 = Date.now();
+const fpsBar = $("fpsbar");
 async function poll(){
   if(polling) return; polling = true;
   while(true){
     try{
-      const r = await fetch(API_BASE + "api/frame.jpg", {headers:{"X-Token":TOKEN}, cache:"no-store"});
-      if(r.ok){
+      const url = API_BASE + "api/frame.jpg" + (lastCounter >= 0 ? ("?since=" + lastCounter) : "");
+      const r = await fetch(url, {headers:{"X-Token":TOKEN}, cache:"no-store"});
+      if(r.status === 200){
         const counter = parseInt(r.headers.get("X-Frame-Counter") || "-1", 10);
         const blob = await r.blob();
         if(counter !== lastCounter && blob.size > 0){
           lastCounter = counter; lastFrameAt = Date.now();
-          const url = URL.createObjectURL(blob);
-          screenImg.src = url; fsImg.src = url;
+          const url2 = URL.createObjectURL(blob);
+          screenImg.src = url2; fsImg.src = url2;
           if(blobUrl) URL.revokeObjectURL(blobUrl);
-          blobUrl = url;
+          blobUrl = url2;
           framesShown++;
           const now = Date.now();
-          if(now - fpsT0 >= 3000){ fpsEl.textContent = (framesShown / ((now - fpsT0)/1000)).toFixed(1) + " fps"; framesShown = 0; fpsT0 = now; }
+          if(now - fpsT0 >= 3000){
+            const f = (framesShown / ((now - fpsT0)/1000)).toFixed(1) + " fps";
+            fpsEl.textContent = f; if(fpsBar) fpsBar.textContent = f;
+            framesShown = 0; fpsT0 = now;
+          }
         }
+      } else if(r.status === 204){
+        /* no new frame yet — immediately re-arm the long-poll */
+      } else {
+        await new Promise(res => setTimeout(res, 400));
       }
-    }catch(e){ /* retry */ }
-    await new Promise(res => setTimeout(res, 90));
+    }catch(e){ await new Promise(res => setTimeout(res, 400)); }
   }
 }
+/* ---------- audio (PC sound via WASAPI loopback -> MP3 stream) ---------- */
+let audioEl = null, audioOn = false;
+$("audiobtn").addEventListener("click", () => {
+  if(!audioOn){
+    if(!audioEl){ audioEl = new Audio(); audioEl.playsInline = true; audioEl.preload = "auto"; }
+    audioEl.src = API_BASE + "api/audio?t=" + encodeURIComponent(TOKEN);
+    audioEl.play().then(() => {
+      audioOn = true; $("audiobtn").textContent = "🔊";
+      showToast("サウンドON（PCの音が出ます）");
+    }).catch(() => { showToast("音声を開始できませんでした"); });
+  } else {
+    audioOn = false;
+    if(audioEl){ audioEl.pause(); audioEl.removeAttribute("src"); audioEl.load(); }
+    $("audiobtn").textContent = "🔇";
+    showToast("サウンドOFF");
+  }
+});
 /* ---------- status ---------- */
 async function refreshStatus(){
   const s = await api("api/status");

@@ -4,9 +4,11 @@
 # mouse/keyboard input ONLY while the game window is in the foreground.
 # Binds 127.0.0.1 only; reached from the phone via Tailscale Serve (tailnet HTTPS).
 import ctypes
+import glob
 import io
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -39,9 +41,22 @@ APPID = "2868840"
 GAME_PROC = "SlayTheSpire2.exe"
 GAME_TITLE_HINT = "Slay the Spire 2"
 PORT = 8765
-MAX_W = 1100          # stream width cap (px)
+MAX_W = 1152          # stream width cap (px)
 JPEG_Q = 62
-FPS = 10              # capture fps while game is running
+JPEG_MAX_BYTES = 90 * 1024   # per-frame size budget; quality steps down to fit
+JPEG_Q_STEPS = (72, 64, 56, 48, 40)
+FPS = 15              # capture fps while game is running
+
+def encode_jpeg(img):
+    """Encode to JPEG, stepping quality down until the frame fits the budget."""
+    data = None
+    for q in JPEG_Q_STEPS:
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=q)
+        data = buf.getvalue()
+        if len(data) <= JPEG_MAX_BYTES:
+            break
+    return data
 
 def log(msg):
     line = "%s %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
@@ -252,7 +267,7 @@ def press_key(name):
 # ---------------- Capture ----------------
 class FrameStore:
     def __init__(self):
-        self.lock = threading.Lock()
+        self.cond = threading.Condition()
         self.jpeg = None
         self.counter = 0
         self.ts = 0.0
@@ -260,14 +275,26 @@ class FrameStore:
         self.thumb_sig = None
 
     def set(self, jpeg, rect):
-        with self.lock:
+        with self.cond:
             self.jpeg = jpeg
             self.counter += 1
             self.ts = time.time()
             self.rect = rect
+            self.cond.notify_all()
 
     def get(self):
-        with self.lock:
+        with self.cond:
+            return self.jpeg, self.counter, self.ts, self.rect
+
+    def wait_newer(self, since, timeout):
+        """Block until a frame with counter > since exists; None on timeout."""
+        end = time.time() + timeout
+        with self.cond:
+            while self.counter <= since or self.jpeg is None:
+                left = end - time.time()
+                if left <= 0:
+                    return None
+                self.cond.wait(left)
             return self.jpeg, self.counter, self.ts, self.rect
 
 FRAMES = FrameStore()
@@ -400,8 +427,8 @@ def capture_loop():
                     # cheap change detection on a thumbnail
                     now = time.time()
                     sig = None
-                    if now - last_sig_check > 0.2:
-                        thumb = img.resize((16, 9)).convert("L")
+                    if now - last_sig_check > 0.1:
+                        thumb = img.resize((32, 18)).convert("L")
                         sig = hash(thumb.tobytes())
                         last_sig_check = now
                     prev_jpeg, prev_counter, prev_ts, _ = FRAMES.get()
@@ -410,9 +437,7 @@ def capture_loop():
                         continue
                     if sig is not None:
                         FRAMES.thumb_sig = sig
-                    buf = io.BytesIO()
-                    img.save(buf, "JPEG", quality=JPEG_Q)
-                    FRAMES.set(buf.getvalue(), rect)
+                    FRAMES.set(encode_jpeg(img), rect)
             else:
                 if WGC["control"] is not None:
                     try:
@@ -433,6 +458,162 @@ def capture_loop():
         except Exception as e:
             log("capture error: %r" % e)
         time.sleep(1.0 / FPS)
+
+# ---------------- Audio (WASAPI loopback -> ffmpeg MP3) ----------------
+# Captures the PC's default render device via PyAudioWPatch loopback and
+# transcodes to MP3 with ffmpeg (encoder only; the essentials build has no
+# wasapi demuxer). Capture runs only while at least one client is connected
+# (plus a 30s grace period after the last one leaves).
+def find_ffmpeg():
+    pats = glob.glob(r"C:\Users\nekom\scoop\apps\ffmpeg-essentials\*\bin\ffmpeg.exe")
+    if pats:
+        pats.sort()
+        return pats[-1]
+    import shutil
+    return shutil.which("ffmpeg")
+
+class AudioHub:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.clients = {}
+        self.next_id = 0
+        self.running = False
+        self.stop_flag = False
+        self.last_gone = 0.0
+        self._pa = None
+        self._stream = None
+        self._ffmpeg = None
+
+    def subscribe(self):
+        with self.lock:
+            self.next_id += 1
+            cid = self.next_id
+            q = queue.Queue(maxsize=96)
+            self.clients[cid] = q
+            need_start = not self.running
+            if need_start:
+                self.running = True
+                self.stop_flag = False
+        if need_start:
+            threading.Thread(target=self._run, daemon=True).start()
+            threading.Thread(target=self._reaper, daemon=True).start()
+        return cid, q
+
+    def unsubscribe(self, cid):
+        with self.lock:
+            self.clients.pop(cid, None)
+            if not self.clients:
+                self.last_gone = time.time()
+
+    def client_count(self):
+        with self.lock:
+            return len(self.clients)
+
+    def _broadcast(self, ff):
+        try:
+            while not self.stop_flag and ff.stdout:
+                chunk = ff.stdout.read(8192)
+                if not chunk:
+                    break
+                with self.lock:
+                    targets = list(self.clients.values())
+                for q in targets:
+                    try:
+                        q.put_nowait(chunk)
+                    except queue.Full:
+                        try:
+                            q.get_nowait()
+                        except queue.Empty:
+                            pass
+                        try:
+                            q.put_nowait(chunk)
+                        except queue.Full:
+                            pass
+        except Exception as e:
+            log("audio broadcast error: %r" % e)
+
+    def _run(self):
+        pa = None
+        try:
+            ff_path = find_ffmpeg()
+            if not ff_path:
+                log("audio: ffmpeg not found")
+                return
+            import pyaudiowpatch as pyaudio
+            pa = pyaudio.PyAudio()
+            self._pa = pa
+            dev = pa.get_default_wasapi_loopback()
+            rate = int(dev["defaultSampleRate"])
+            ch = max(1, min(2, int(dev["maxInputChannels"])))
+            stream = pa.open(format=pyaudio.paInt16, channels=ch, rate=rate,
+                             input=True, input_device_index=dev["index"],
+                             frames_per_buffer=2048)
+            self._stream = stream
+            ff = subprocess.Popen(
+                [ff_path, "-hide_banner", "-loglevel", "error",
+                 "-f", "s16le", "-ar", str(rate), "-ac", str(ch), "-i", "-",
+                 "-codec:a", "libmp3lame", "-b:a", "128k",
+                 "-ar", "44100", "-ac", "2", "-f", "mp3", "-"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL)
+            self._ffmpeg = ff
+            threading.Thread(target=self._broadcast, args=(ff,), daemon=True).start()
+            log("audio started: loopback @%dHz ch=%d -> mp3 128k" % (rate, ch))
+            while not self.stop_flag:
+                data = stream.read(2048, exception_on_overflow=False)
+                try:
+                    ff.stdin.write(data)
+                except (BrokenPipeError, OSError):
+                    break
+        except Exception as e:
+            log("audio run error: %r" % e)
+        finally:
+            self._teardown()
+            with self.lock:
+                self.running = False
+
+    def _teardown(self):
+        try:
+            if self._stream is not None:
+                self._stream.stop_stream()
+                self._stream.close()
+        except Exception:
+            pass
+        self._stream = None
+        try:
+            if self._ffmpeg is not None:
+                if self._ffmpeg.stdin:
+                    self._ffmpeg.stdin.close()
+                self._ffmpeg.terminate()
+        except Exception:
+            pass
+        self._ffmpeg = None
+        try:
+            if self._pa is not None:
+                self._pa.terminate()
+        except Exception:
+            pass
+        self._pa = None
+
+    def _reaper(self):
+        while True:
+            time.sleep(5)
+            with self.lock:
+                if not self.running:
+                    return
+                idle = (not self.clients) and self.last_gone and (time.time() - self.last_gone > 30)
+            if idle:
+                log("audio idle 30s; stopping capture")
+                self.stop_flag = True
+                try:
+                    if self._stream is not None:
+                        self._stream.stop_stream()
+                        self._stream.close()
+                except Exception:
+                    pass
+                return
+
+AUDIO = AudioHub()
 
 # ---------------- Actions ----------------
 state_lock = threading.Lock()
@@ -502,6 +683,7 @@ def status():
         "focused": bool(hwnd) and user32.GetForegroundWindow() == hwnd,
         "rect": rect,
         "frame_age_ms": int((time.time() - fts) * 1000) if fts else None,
+        "audio_clients": AUDIO.client_count(),
         "version": "v0.113.1 / build 26625880",
     }
 
@@ -617,7 +799,25 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authed():
                 return self._json({"ok": False, "error": "unauthorized"}, 401)
             touch_client()
-            jpeg, counter, fts, _ = FRAMES.get()
+            q = parse_qs(urlparse(self.path).query)
+            since = None
+            if "since" in q:
+                try:
+                    since = int(q["since"][0])
+                except Exception:
+                    since = None
+            if since is not None:
+                # Long-poll: wait up to 1.5s for a frame newer than `since`.
+                got = FRAMES.wait_newer(since, 1.5)
+                if got is None:
+                    self.send_response(204)
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
+                jpeg, counter, fts, _ = got
+            else:
+                jpeg, counter, fts, _ = FRAMES.get()
             if not jpeg:
                 return self._json({"ok": False, "error": "no frame yet"}, 503)
             self.send_response(200)
@@ -628,6 +828,32 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("X-Frame-Age-Ms", str(int((time.time() - fts) * 1000)) if fts else "-1")
             self.end_headers()
             self.wfile.write(jpeg)
+            return
+        if path == "/api/audio":
+            if not self._authed():
+                return self._json({"ok": False, "error": "unauthorized"}, 401)
+            touch_client()
+            cid, aq = AUDIO.subscribe()
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            try:
+                while True:
+                    try:
+                        chunk = aq.get(timeout=20)
+                    except queue.Empty:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+            except Exception:
+                pass
+            finally:
+                AUDIO.unsubscribe(cid)
             return
         if path == "/api/frame_pw.jpg":
             if not self._authed():
