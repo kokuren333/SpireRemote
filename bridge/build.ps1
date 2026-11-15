@@ -1,6 +1,6 @@
 # SpireBridge build + staging script (run on the PC).
 # Builds Release and copies ONLY the mod dll + manifest into
-#   <this bridge folder>\dist\SpireBridge\
+#   <this script's directory>\dist\SpireBridge\
 # It NEVER touches the game's mods folder.
 param(
     [string]$Sts2GameDir = "C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2"

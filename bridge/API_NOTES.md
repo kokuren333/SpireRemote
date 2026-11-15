@@ -912,3 +912,130 @@ MegaCrit.Sts2.Core.Nodes.NGame.IsMainThread() -> bool // public static
 - `ModHelper.AddModelToPool` のジェネリック版シグネチャ詳細（ブリッジ用途では不要）
 - ローカルプレイヤーの厳密な特定方法（マルチ時。シングルプレイは `Players[0]` で確定扱い）
 - `Hook`（`MegaCrit.Sts2.Core.Hooks.Hook`、集計フックの静的窓口）の詳細 — 状態変更の購読に使える可能性があるが今回未精査
+
+## 13. Round 2 metadata investigation and implementation (0.3.0, 2026-11-15)
+
+Investigation was entirely outside the game. `tools/Inspect` uses reflection on
+the workspace copy `bridge/harness/bin/Debug/net9.0/sts2.dll`; it enumerates
+metadata only, without constructing game objects or invoking getters. Reports:
+`tools/Inspect/round2-metadata.txt`, `round2-focus-metadata.txt`,
+`round2-wrapper-metadata.txt`, `round2-reward-metadata.txt`. Builds reference
+only the installed managed assembly directory, never mods. No existing bridge
+listener, live host or game process was queried or changed.
+
+### Description paths (E-1 / E-2)
+
+- Confirmed: EventOption.Description and RestSiteOption.Description are distinct
+  LocString members from Title. Implementation uses GetFormattedText, with
+  exceptions yielding null. Reward.Description remains the formatted source;
+  PotionReward.Potion and RelicReward.Relic provide a real model title for a
+  shorter label where available. Other reward types retain their formatted
+  description as both label and description, rather than inventing names.
+- PotionModel and RelicModel contain both Description and DynamicDescription
+  metadata. Direct Description access failed compilation (inaccessible,
+  CS1061); public DynamicDescription compiled successfully. Display readers use
+  DynamicDescription.GetFormattedText through the guarded formatter. Actual
+  localization/dynamic-variable values remain untested until a future restart.
+- Map descriptions are generic UI text for known PointType names. Actual enum
+  uses Shop (mapped to ショップ). Unknown maps to ？; unrecognized names including
+  Unassigned return null. No invented event-specific descriptions.
+
+### Focus ownership (E-3)
+
+Confirmed metadata ownership paths:
+
+- NCardHolder.CardModel / CardNode -> NCard.Model (private `_model`).
+- NEventOptionButton.Option -> EventOption.
+- NRestSiteButton.Option (private `_option`) -> RestSiteOption.
+- NRewardButton.Reward -> Reward.
+- NPotionHolder.Potion -> NPotion.Model -> PotionModel.
+- NCreature.Entity -> Creature.
+- NTreasureRoomRelicHolder.Relic -> NRelic.Model -> RelicModel.
+
+Runtime implementation (not exercised in-engine): Build already runs through
+GameThread.Invoke. It takes the current screen Node, or NRun.Instance, calls
+GetViewport().GuiGetFocusOwner(), then inspects that node and at most 12 parent
+levels. Reflection reads only the known ownership members (including inherited
+private fields), and up to two levels of CardNode/Potion/Relic wrappers. It stops
+at the nearest model owner, even when that owner cannot be mapped. It never
+scans sibling nodes, collections, arbitrary getters or global model graphs.
+`NCard._previewTarget`, cached/last focus fields and canonical model references
+are deliberately excluded: those can refer to something other than the focused
+item. Two distinct ownership models at the same level return null.
+
+Matching is ReferenceEquals against the current hand, potion, enemy or choice
+source list. Value equality, titles and IDs do not establish selection. Name and
+description come from the snapshot of that same model (enemy description is
+null because there is no verified general enemy description source). Cards in
+hand use kind=card; a displayed card/relic represented only in choices uses
+kind=choice. All acquisition is guarded; missing focus, unsupported popup,
+unknown wrapper, ambiguity or exceptions leave selected=null. The contract
+permits kind=other, but the implementation does not fabricate it for unknown UI.
+
+Managed harness checks cover reference identity versus value equality,
+duplicate ownership, ambiguous ownership, missing ownership, guarded/inherited
+reflection and selected serialization with synthetic tokens. They do NOT prove
+that keyboard focus moves to the expected nodes. GuiGetFocusOwner and parent
+traversal were compile-checked only, not invoked outside a Godot engine. The
+keyboard-only behavior and all positive live model matches remain deferred to
+the next supervised restart; this is required by the current stop conditions.
+
+### Card selection (E-4)
+
+Confirmed NChooseACardSelectionScreen._cards and
+NCardGridSelectionScreen._cards are IReadOnlyList<CardModel>.
+NCardRewardSelectionScreen._options is IReadOnlyList<CardCreationResult>, whose
+Card property supplies the offered card. Reflection examines compatible
+collection fields on the active screen and its base classes, preserving order.
+If multiple nonempty collections disagree by reference/order it returns empty
+rather than merging pools with selected subsets. Card alternatives that are
+not CardModel are omitted. Choices use kind=card_select, title and guarded card
+description; no corresponding actions or execution paths were added. Unknown
+screen shapes return empty. Live screen visibility/content remains unverified.
+
+### Merchant (E-5)
+
+The room model MerchantRoom has no inventory member; that route was a miss.
+Confirmed UI route: NRun.Instance.MerchantRoom.Inventory (NMerchantInventory)
+.Inventory (MerchantInventory). NMerchantRoom.Instance also exists, but the
+implementation deliberately uses the current NRun room. NMerchantInventory
+exposes IsOpen; closed inventory returns no choices.
+MerchantInventory.AllEntries contains MerchantEntry, with Cost and IsStocked.
+MerchantCardEntry has CreationResult.Card (not a direct Model property);
+MerchantPotionEntry.Model and MerchantRelicEntry.Model are available. Stocked
+entries with these models become shop_item choices with real model title and
+`<Cost>G ＋ <dynamic description>`; missing descriptions retain only the price.
+Card-removal and unknown entry kinds have no supported item model and are
+omitted. Reading the route compiled, but positive inventory reads were NOT
+performed in the running game. Purchase execution remains unsupported.
+
+### Treasure (E-6)
+
+TreasureRoom model has no offered-relic list; that route was a miss. Confirmed
+UI route: NRun.Instance.TreasureRoom (NTreasureRoom), private
+`_isRelicCollectionOpen` and `_relicCollection`;
+NTreasureRoomRelicCollection.HoldersInUse ->
+NTreasureRoomRelicHolder.Relic (NRelic) -> NRelic.Model (RelicModel).
+Only the open collection is enumerated, with kind=relic and real title/dynamic
+description. Missing/private-field changes return empty. Positive runtime reads,
+removal after claims and multiplayer holder order are unverified; no treasure
+selection action was added. Actual runtime proof cannot be obtained under the
+current prohibition on touching the game, and is deferred explicitly.
+
+### Out-of-game checks and fixtures (E-8)
+
+Production health, startup, assembly and manifest versions are 0.3.0. The server
+constructor accepts an optional validated IPv4 loopback root prefix, retaining
+127.0.0.1:8766 by default. Only the harness overrides it. Harness requires
+`--port <isolated-port>` (rejects 8765/8766); Python tests use OS-assigned owned
+ports and readiness from the exact child stdout. They never contact a preexisting
+listener. Real provider mode returns honest unknown/empty state and selected=null.
+Explicit --fixture mode returns synthetic populated choices/potions via real DTO
+serialization, so description-key assertions are non-vacuous. Neither fixture
+nor fallback checks prove the in-engine readers work.
+
+`spire/fakebridge/fake_bridge.py` has combat selected card index 1 and potion
+description, a `/fixtures/card_selection` response, and a `--card-selection`
+mode exposing that state through /state with no /actions. Invalid display-only
+actions are rejected. Use `--port` for an isolated client-test instance; do not
+start the default port while the real bridge is active.

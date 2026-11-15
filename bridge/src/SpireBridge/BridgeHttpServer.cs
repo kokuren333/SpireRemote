@@ -25,14 +25,20 @@ public sealed class BridgeHttpServer : IDisposable
 
     private readonly IStateProvider _stateProvider;
     private readonly IActionExecutor _actionExecutor;
+    private readonly string _prefix;
     private readonly HttpListener _listener = new();
     private CancellationTokenSource? _cts;
     private Task? _loop;
 
-    public BridgeHttpServer(IStateProvider stateProvider, IActionExecutor actionExecutor)
+    public BridgeHttpServer(IStateProvider stateProvider, IActionExecutor actionExecutor, string prefix = Prefix)
     {
+        var uri = new Uri(prefix);
+        if (uri.Scheme != "http" || uri.Host != "127.0.0.1" || uri.AbsolutePath != "/" ||
+            !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment))
+            throw new ArgumentException("Bridge must bind an HTTP IPv4 loopback root prefix", nameof(prefix));
         _stateProvider = stateProvider;
         _actionExecutor = actionExecutor;
+        _prefix = prefix;
     }
 
     public bool IsRunning { get; private set; }
@@ -40,12 +46,12 @@ public sealed class BridgeHttpServer : IDisposable
     public void Start()
     {
         if (IsRunning) return;
-        _listener.Prefixes.Add(Prefix);
+        _listener.Prefixes.Add(_prefix);
         _listener.Start();
         IsRunning = true;
         _cts = new CancellationTokenSource();
         _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
-        BridgeLog.Info($"[SpireBridge] HTTP listening on {Prefix}");
+        BridgeLog.Info($"[SpireBridge] HTTP listening on {_prefix}");
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)
@@ -86,7 +92,7 @@ public sealed class BridgeHttpServer : IDisposable
                     string? gameVersion = null;
                     try { gameVersion = GameVersion.Get(); }
                     catch { gameVersion = null; }
-                    WriteJson(context, 200, new { ok = true, service = "SpireBridge", version = "0.2.0", game_version = gameVersion });
+                    WriteJson(context, 200, new { ok = true, service = "SpireBridge", version = "0.3.0", game_version = gameVersion });
                     break;
                 }
 

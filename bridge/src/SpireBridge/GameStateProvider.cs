@@ -53,6 +53,7 @@ public sealed class GameStateProvider : IStateProvider
     {
         var snap = Fallback();
         var actions = new List<ActionInfo>();
+        var choiceModels = new List<object>();
         var built = new Built { Snapshot = snap, Actions = actions };
 
         try
@@ -205,6 +206,7 @@ public sealed class GameStateProvider : IStateProvider
                     Id = GameAccess.SafeString(() => potion.Id.Entry)
                          ?? GameAccess.SafeString(() => potion.Id.ToString()),
                     Name = SafePotionName(potion),
+                    Description = DisplayAccess.Description(potion),
                 });
             }
 
@@ -298,7 +300,9 @@ public sealed class GameStateProvider : IStateProvider
                             () => $"{point.PointType} ({point.coord.col},{point.coord.row})")
                             ?? GameAccess.SafeString(() => point.PointType.ToString())
                             ?? "map";
-                        snap.Choices.Add(new ChoiceInfo { Index = i, Label = label, Kind = "map" });
+                        snap.Choices.Add(new ChoiceInfo { Index = i, Label = label, Kind = "map",
+                            Description = DisplayAccess.MapDescription(point.PointType.ToString()) });
+                        choiceModels.Add(point);
                         actions.Add(new ActionInfo
                         {
                             ActionId = $"choose_map:{i}",
@@ -328,7 +332,9 @@ public sealed class GameStateProvider : IStateProvider
                                 bool locked = false;
                                 try { locked = opt.IsLocked; } catch { }
                                 if (locked) label = (label ?? "option") + " [locked]";
-                                snap.Choices.Add(new ChoiceInfo { Index = i, Label = label, Kind = "event" });
+                                snap.Choices.Add(new ChoiceInfo { Index = i, Label = label, Kind = "event",
+                                    Description = GameAccess.SafeString(() => opt.Description?.GetFormattedText()) });
+                                choiceModels.Add(opt);
                                 actions.Add(new ActionInfo
                                 {
                                     ActionId = $"choose_event:{i}",
@@ -358,7 +364,9 @@ public sealed class GameStateProvider : IStateProvider
                                 bool enabled = true;
                                 try { enabled = opt.IsEnabled; } catch { }
                                 if (!enabled) label = (label ?? "option") + " [disabled]";
-                                snap.Choices.Add(new ChoiceInfo { Index = i, Label = label, Kind = "rest" });
+                                snap.Choices.Add(new ChoiceInfo { Index = i, Label = label, Kind = "rest",
+                                    Description = GameAccess.SafeString(() => opt.Description?.GetFormattedText()) });
+                                choiceModels.Add(opt);
                                 actions.Add(new ActionInfo
                                 {
                                     ActionId = $"choose_rest:{i}",
@@ -383,9 +391,10 @@ public sealed class GameStateProvider : IStateProvider
                         for (int i = 0; i < rewards.Count; i++)
                         {
                             var reward = rewards[i];
-                            string? label = null;
-                            try { label = reward.Description?.GetFormattedText(); } catch { }
-                            snap.Choices.Add(new ChoiceInfo { Index = i, Label = label, Kind = "reward" });
+                            var description = GameAccess.SafeString(() => reward.Description?.GetFormattedText());
+                            string? label = DisplayAccess.RewardName(reward) ?? description;
+                            snap.Choices.Add(new ChoiceInfo { Index = i, Label = label, Kind = "reward", Description = description });
+                            choiceModels.Add(reward);
                             actions.Add(new ActionInfo
                             {
                                 ActionId = $"claim_reward:{i}",
@@ -407,12 +416,27 @@ public sealed class GameStateProvider : IStateProvider
                     break;
                 }
 
-                // "shop" / "treasure" / "card_selection": v1 intentionally
-                // exposes no choices (see report). Snapshot fields above
-                // (run/player/potions/screen) are still real.
+                case "card_selection":
+                    foreach (var card in DisplayAccess.SelectionCards(screenObj))
+                    {
+                        snap.Choices.Add(new ChoiceInfo { Index = snap.Choices.Count, Kind = "card_select",
+                            Label = GameAccess.SafeString(() => card.Title), Description = ResolveDescription(card) });
+                        choiceModels.Add(card);
+                    }
+                    break;
+                case "shop":
+                    DisplayAccess.AddShopChoices(snap.Choices, choiceModels);
+                    break;
+                case "treasure":
+                    DisplayAccess.AddTreasureChoices(snap.Choices, choiceModels);
+                    break;
                 default:
                     break;
             }
+
+            // A focus/read failure must never discard the rest of the snapshot.
+            try { snap.Selected = DisplayAccess.Selected(screenObj, snap, handCards, potions, enemies, choiceModels); }
+            catch { snap.Selected = null; }
         }
         catch (Exception ex)
         {

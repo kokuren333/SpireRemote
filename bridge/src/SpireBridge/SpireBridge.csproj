@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <AssemblyName>SpireBridge</AssemblyName>
+    <Version>0.3.0</Version>
     <RootNamespace>SpireBridge</RootNamespace>
     <!-- The mod DLL is loaded by the game itself; do not copy game assemblies. -->
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
@@ -23,6 +24,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="SpireBridgeHarness" />
     <!-- Private=false: use the game's own copies at runtime, never bundle them. -->
     <Reference Include="sts2">
       <HintPath>$(Sts2ManagedDir)\sts2.dll</HintPath>

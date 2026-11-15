@@ -52,6 +52,7 @@ public sealed class PotionInfo
     [JsonPropertyName("index")] public int Index { get; set; }
     [JsonPropertyName("id")] public string? Id { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
 }
 
 public sealed class ChoiceInfo
@@ -59,6 +60,15 @@ public sealed class ChoiceInfo
     [JsonPropertyName("index")] public int Index { get; set; }
     [JsonPropertyName("label")] public string? Label { get; set; }
     [JsonPropertyName("kind")] public string? Kind { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+}
+
+public sealed class SelectedInfo
+{
+    [JsonPropertyName("kind")] public string Kind { get; set; } = "other";
+    [JsonPropertyName("index")] public int? Index { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
 }
 
 public sealed class StateSnapshot
@@ -70,6 +80,7 @@ public sealed class StateSnapshot
     [JsonPropertyName("enemies")] public List<EnemyInfo> Enemies { get; set; } = new();
     [JsonPropertyName("potions")] public List<PotionInfo> Potions { get; set; } = new();
     [JsonPropertyName("choices")] public List<ChoiceInfo> Choices { get; set; } = new();
+    [JsonPropertyName("selected")] public SelectedInfo? Selected { get; set; }
 }
 
 public sealed class ActionInfo

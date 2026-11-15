@@ -1,11 +1,11 @@
-# SpireBridge 設計書（v0.2.0）
+# SpireBridge 設計書（v0.3.0）
 
 STS2（Slay the Spire 2）自前ブリッジ mod の設計・API仕様・手順書。
 既存 mod（STS2AIMCP / STS2-Agent）は内部仕様の参考のみで、コードは全て自前。
 ゲームのアップデートに自分で追随できるよう、依存は「ゲーム本体 DLL の公開 API」だけに絞っている。
 
 - 対象ゲーム: STS2 v0.113.1 / build 26625880（public-beta、Godot 4.5系 C#、.NET 9）
-- mod: SpireBridge 0.2.0（.NET 9、C#）
+- mod: SpireBridge 0.3.0（.NET 9、C#）
 - HTTP: `http://127.0.0.1:8766/`（loopback のみ、認証なし＝PC 内からの利用前提。外部公開は SpireRemote ホスト側のトークン認証付き中継で行う）
 - 調査根拠: `API_NOTES.md`（sts2.dll メタデータ実測ノート）
 
@@ -46,11 +46,11 @@ STS2（Slay the Spire 2）自前ブリッジ mod の設計・API仕様・手順�
 mod の生存と版情報。
 
 ```json
-{"ok":true,"service":"SpireBridge","version":"0.2.0","game_version":"v0.113.1"}
+{"ok":true,"service":"SpireBridge","version":"0.3.0","game_version":"v0.113.1"}
 ```
 
 - `game_version` は sts2 アセンブリ脇の `release_info.json` から取得。失敗時は `null`。
-- 上記はゲーム外ハーネスでの実測値（2026-11-15）。
+- version は 0.3.0。上記 game_version は形の例であり、取得できなければ null。Round 2 のゲーム外実測は末尾と台帳参照。
 
 ### GET /state
 
@@ -74,15 +74,16 @@ mod の生存と版情報。
      "intent": "攻撃 7"}
   ],
   "potions": [
-    {"index": 0, "id": "FIRE_POTION", "name": "火炎ポーション"}
+    {"index": 0, "id": "FIRE_POTION", "name": "火炎ポーション", "description": "敵にダメージを与える。"}
   ],
-  "choices": []
+  "choices": [],
+  "selected": null
 }
 ```
 
 | フィールド | 内容 | 取得経路 |
 |---|---|---|
-| `screen` | `main_menu` / `combat` / `map` / `event` / `rest` / `merchant` / `treasure` / `rewards` / `card_selection` / `unknown` | CombatManager.IsInProgress を基本に、ActiveScreenContext の現画面型（NRewardsScreen 等）でオーバーレイを上書き、最後に CurrentRoom の具象型 |
+| `screen` | `main_menu` / `combat` / `map` / `event` / `rest` / `shop` / `treasure` / `rewards` / `card_selection` / `unknown` | CombatManager.IsInProgress を基本に、ActiveScreenContext の現画面型（NRewardsScreen 等）でオーバーレイを上書き、最後に CurrentRoom の具象型 |
 | `run.act` | 現在の Act（1始まり） | IRunState.CurrentActIndex + 1 |
 | `run.floor` | 通算フロア | IRunState.TotalFloor |
 | `run.gold` | ゴールド | Player.Gold |
@@ -90,8 +91,9 @@ mod の生存と版情報。
 | `player.energy/max_energy` | 戦闘中のみ（戦闘外は null） | PlayerCombatState.Energy / MaxEnergy |
 | `hand[]` | 手札（並び順 = index）。`cost` は実効コスト、`description` は動的数値反映済み文字列、`playable` は使用可否 | PlayerCombatState.Hand.Cards。cost は `EnergyCost.GetResolved()` → `GetAmountToSpend()` → `Canonical` の順にフォールバック。説明は `GetDescriptionForPile(Hand)` → `Description.GetFormattedText()` |
 | `enemies[]` | 敵一覧。`intent` はインテントの表示文字列（攻撃は合計ダメージ付きを試行） | CombatState.Enemies。インテントは `MonsterModel.NextMove.Intents`（public 経路）。※ API_NOTES 記載の `GetIntents()` は v0.113.1 では private のため reflection フォールバックのみ |
-| `potions[]` | 所持ポーション（空きスロットは含まない） | Player.Potions |
-| `choices[]` | 選択肢が出る画面での選択肢一覧（下表） | 画面別 |
+| `potions[]` | 所持ポーション（空きスロットは含まない）。description は string または null | Player.Potions / PotionModel.DynamicDescription.GetFormattedText() |
+| `choices[]` | index / label / kind / description（string または null） | event/rest は独立した Description、reward は整形した Reward.Description、map は一般的なノード種別説明 |
+| `selected` | null または {kind, index, name, description}。kind は card / choice / potion / enemy / other、index は int または null、文字列は nullable | ゲームスレッド上の GetViewport().GuiGetFocusOwner() → 所有ノード → 同一モデル参照を現在の配列内で照合。曖昧・未解決なら null |
 
 `choices` の画面別生成:
 
@@ -101,9 +103,13 @@ mod の生存と版情報。
 | event | イベントの現在選択肢（ロック中は label に付記） | `event` |
 | rest | 休憩所の選択肢（無効なものは付記） | `rest` |
 | rewards | 提示中の報酬（RewardsSet を NRewardsScreen の private フィールド `_rewardsSet` から reflection で best-effort 取得。取れなければ空） | `reward` |
-| merchant / treasure / card_selection | **v0.2.0 では空**（未対応、§5 参照） | — |
+| card_selection | アクティブ画面の CardModel / CardCreationResult コレクションから表示カード。矛盾する複数コレクションは空 | `card_select`（表示専用） |
+| shop | 開いている NRun.MerchantRoom.Inventory.Inventory の在庫モデル。label=名前、description=価格G ＋ 説明。売切れとモデルなしスロットは除外 | `shop_item`（表示専用） |
+| treasure | 開いたレリック選択 UI の HoldersInUse → Relic.Model | `relic`（表示専用） |
 
-ラン外（メインメニュー等）: `{"screen":"main_menu","run":null,"player":null,"hand":[],"enemies":[],"potions":[],"choices":[]}` の形で返す。
+ラン外（メインメニュー等）: `{"screen":"main_menu","run":null,"player":null,"hand":[],"enemies":[],"potions":[],"choices":[],"selected":null}` の形で返す。
+
+Display-only choices add no /actions and have no execution support. Missing values stay null/empty. selected uses reference identity, never names or IDs. New in-engine readers await supervised validation.
 
 ### GET /actions
 
@@ -188,7 +194,7 @@ powershell -ExecutionPolicy Bypass -File <this bridge folder>\build.ps1
 
 ## 4. 配置手順（実機ロードテスト時にのみ実施）
 
-**現在は未配置。** ユーザーのプレイ中は mods フォルダに入れない方針のため、配置は次回ゲーム起動に合わせてユーザーの前で行う。
+**0.3.0 はステージングのみ。** 稼働中の 0.2.0、ゲームプロセス、mods、ライブホストには触れない。配備は次回ゲーム起動に合わせて統括が行う。以下は将来の手順であり Round 2 では実行しない。
 
 ```powershell
 # ゲームが終了していることを確認してから:
@@ -202,11 +208,12 @@ Copy-Item <this bridge folder>\dist\SpireBridge\SpireBridge.json "...\mods\Spire
 - 戻し方: `mods\SpireBridge\` フォルダを削除するだけ。既存 mod（STS2AIMCP 等）には一切干渉しない。
 - ポート 8766 が他プロセスと競合した場合は、BridgeHttpServer の Prefix を変更して再ビルド（報告書を残すこと）。
 
-## 5. 未対応範囲（v0.2.0）
+## 5. 未対応範囲（v0.3.0）
 
-- **ショップ**: 在庫の choices 列挙と購入（buy アクション）未対応。NMerchantRoom が abstract + UI ラッパ経由で、モデル層 `MerchantInventory` への素直な経路が未確定のため見送り（画面・所持品の表示自体は /state で返る）。
-- **宝箱**: 提示レリック一覧の取得経路が未確定のため、choices 列挙とレリック選択（PickRelicAction）未対応。
-- **カード選択画面**（カード報酬の選択、手札/デッキからの選択等）: 確定操作の最小経路が未確定のため未対応（screen 判定のみ）。
+- **ショップ**: 在庫表示は best-effort 実装。購入アクションは未対応。カード除去や未知の在庫型はモデル名を確実に読めないため列挙しない。閉じた在庫は空。実機未確認。
+- **宝箱**: 開いた提示レリック UI の choices は best-effort 実装。レリック選択（PickRelicAction）は未対応。閉じた UI / 経路不一致は空。実機未確認。
+- **カード選択画面**: アクティブ画面の提示コレクション表示を実装。カードの確定操作は未対応。カード以外の報酬代替や未知の画面型、矛盾するコレクションは列挙しない。
+- **selected**: フォーカスノードと親（最大12階層）の確認済み所有メンバーのみ走査。プレビュー対象、キャッシュしたフォーカス、兄弟、モデル一覧は走査しない。キーボード操作時の focus-owner の実挙動、ポップアップ／未知のラッパは実機未検証。確実に照合できなければ null。
 - **報酬フロー全体**: RewardsSet の取得が reflection best-effort。claim_reward 後のカード報酬選択画面への遷移も含め、実機確認が必須。
 - **ポーションの対象**: 対象必須判定は AnyEnemy のみ対応。AnyPlayer/AnyAlly 等は null 対象で渡している。
 - **マルチプレイ**: ローカルプレイヤーは `Players[0]` 前提（シングルプレイ想定）。同期層（RequestEnqueue 経由）がシングルで問題ないかも含め実機確認待ち。
@@ -227,3 +234,12 @@ Copy-Item <this bridge folder>\dist\SpireBridge\SpireBridge.json "...\mods\Spire
 8. **終了処理**: ゲームを通常終了し、異常なエラーログが残っていないこと。問題があれば mods\SpireBridge を削除して切り分ける。
 
 各ステップで /state の実 JSON を採取し、この DESIGN.md の「応答例」を実測値に差し替えること。
+
+
+## Round 2 verification (2026-11-15)
+
+- Build and staging: run `powershell -NoProfile -ExecutionPolicy Bypass -File bridge/build.ps1` from SpireWork. Output stays under `bridge/dist/SpireBridge/`. No mods deployment. Assembly/manifest/health version: 0.3.0.
+- Isolated check: `dotnet build bridge/harness/Harness.csproj`, then `python spire/test_proxy.py --harness bridge/harness/bin/Debug/net9.0/SpireBridgeHarness.dll`. Python reserves only owned ephemeral loopback listeners, and launches the harness with an isolated `--port`. It never probes 8765/8766.
+- Harness default provider returns the real unknown/empty/null fallback without a game thread. Explicit `--fixture` uses synthetic populated DTOs to check description keys through the same HTTP serializer; this is not evidence of game model reads. Managed startup checks cover reference-only selection, ambiguity, missing focus, guarded reflection and DTO null serialization.
+- Fake bridge supports `--port <isolated-port> --card-selection` and `/fixtures/card_selection` for display-only client testing. Combat fixture includes potion description and selected hand card index 1.
+- See `API_NOTES.md` ?13 for confirmed metadata paths and unverified runtime behavior; `codex_ledger.md` Round 2 records commands, results and final SHA256.

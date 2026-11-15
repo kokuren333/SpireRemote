@@ -79,7 +79,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 選択肢を名前付きボタンで出す「人向け MCP」的な UI のための土台です。
 
 - 要 .NET 9 SDK。`bridge/build.ps1` でビルドし、生成物をゲームの `mods/SpireBridge/` に置きます
-- 仕様と現状は [bridge/DESIGN.md](bridge/DESIGN.md) を参照（v0.2.0：状態取得と基本アクション実装済み、実機ロードテストはこれから）
+- 仕様と現状は [bridge/DESIGN.md](bridge/DESIGN.md) を参照（v0.2.0 は実機ロードテスト合格・稼働中。v0.3.0 は説明文・フォーカス中要素・表示専用 choices を追加してビルド済み、次回ゲーム起動時に有効化）
 
 ## 開発メモ
 

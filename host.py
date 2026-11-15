@@ -10,6 +10,7 @@ import json
 import os
 import queue
 import socket
+import statistics
 import subprocess
 import sys
 import threading
@@ -50,6 +51,30 @@ JPEG_Q = 62
 JPEG_MAX_BYTES = 45 * 1024   # per-frame size budget; quality steps down to fit
 JPEG_Q_STEPS = (64, 56, 48, 40, 32, 24)
 FPS = 15              # capture fps while game is running
+INPUT_WAKE = threading.Event()
+LAST_INPUT = {"t": 0.0}
+LAT_LOCK = threading.Lock()
+LAT = {"post": [], "frame": [], "pending": None}
+
+def latency_status():
+    with LAT_LOCK:
+        posts, frames = LAT["post"], LAT["frame"]
+        return {
+            "post_ms": posts[-1] if posts else None,
+            "frame_after_ms": frames[-1] if frames else None,
+            "post_med_ms": statistics.median(posts) if posts else None,
+            "frame_med_ms": statistics.median(frames) if frames else None,
+            "n": len(posts),
+        }
+
+def publish_frame(jpeg, rect):
+    # Serialize publication with input completion so the first later frame wins.
+    with LAT_LOCK:
+        FRAMES.set(jpeg, rect)
+        if LAT["pending"] is not None:
+            LAT["frame"].append((time.perf_counter() - LAT["pending"]) * 1000)
+            del LAT["frame"][:-20]
+            LAT["pending"] = None
 
 def encode_jpeg(img):
     """Encode to JPEG, stepping quality down until the frame fits the budget."""
@@ -251,7 +276,7 @@ def mouse_button(px, py, down=True, right=False):
 
 def mouse_click(px, py, right=False):
     mouse_button(px, py, True, right)
-    time.sleep(0.05)
+    time.sleep(0.025)
     mouse_button(px, py, False, right)
 
 VK = {"esc": 0x1B, "escape": 0x1B, "space": 0x20, "e": 0x45, "m": 0x4D,
@@ -267,7 +292,7 @@ def press_key(name):
         return False
     d = INPUT(); d.type = INPUT_KEYBOARD; d.ki = KEYBDINPUT(vk, 0, 0, 0, None)
     u = INPUT(); u.type = INPUT_KEYBOARD; u.ki = KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, None)
-    _send([d]); time.sleep(0.04); _send([u])
+    _send([d]); time.sleep(0.018); _send([u])
     return True
 
 # ---------------- Capture ----------------
@@ -410,7 +435,11 @@ def _wgc_client_image(rect):
 def capture_loop():
     last_sig_check = 0.0
     last_focus_check = 0.0
+    force_encode = False
     while True:
+        with LAT_LOCK:
+            force_encode = force_encode or INPUT_WAKE.is_set()
+            input_seen = LAST_INPUT["t"]
         try:
             hwnd, rect = find_game_window()
             if hwnd and (time.time() - last_focus_check) > 2.0:
@@ -439,12 +468,11 @@ def capture_loop():
                         sig = hash(thumb.tobytes())
                         last_sig_check = now
                     prev_jpeg, prev_counter, prev_ts, _ = FRAMES.get()
-                    if sig is not None and sig == FRAMES.thumb_sig and (now - prev_ts) < 1.5:
-                        time.sleep(1.0 / FPS)
+                    if not force_encode and sig is not None and sig == FRAMES.thumb_sig and (now - prev_ts) < 1.5:
                         continue
                     if sig is not None:
                         FRAMES.thumb_sig = sig
-                    FRAMES.set(encode_jpeg(img), rect)
+                    publish_frame(encode_jpeg(img), rect)
             else:
                 if WGC["control"] is not None:
                     try:
@@ -455,8 +483,8 @@ def capture_loop():
                     WGC["cap"] = None
                     WGC["img"] = None
                 prev_jpeg, _, prev_ts, _ = FRAMES.get()
-                if prev_jpeg is None or (time.time() - prev_ts) > 2.0 or FRAMES.rect is not None:
-                    FRAMES.set(placeholder_jpeg([
+                if force_encode or prev_jpeg is None or (time.time() - prev_ts) > 2.0 or FRAMES.rect is not None:
+                    publish_frame(placeholder_jpeg([
                         "Spire Remote - Slay the Spire 2",
                         "Game is not running.",
                         "Tap LAUNCH in the PWA to start it from Steam.",
@@ -464,7 +492,13 @@ def capture_loop():
                     ]), None)
         except Exception as e:
             log("capture error: %r" % e)
-        time.sleep(1.0 / FPS)
+        finally:
+            with LAT_LOCK:
+                # Do not clear a newer input that arrived during this capture.
+                if LAST_INPUT["t"] == input_seen:
+                    INPUT_WAKE.clear()
+            INPUT_WAKE.wait(1.0 / FPS)
+            force_encode = INPUT_WAKE.is_set()
 
 # ---------------- Audio (WASAPI loopback -> ffmpeg MP3) ----------------
 # Captures the PC's default render device via PyAudioWPatch loopback and
@@ -693,10 +727,14 @@ def status():
         "rect": rect,
         "frame_age_ms": int((time.time() - fts) * 1000) if fts else None,
         "audio_clients": AUDIO.client_count(),
+        "lat": latency_status(),
         "version": "v0.113.1 / build 26625880",
     }
 
 def handle_input(body):
+    with LAT_LOCK:
+        LAST_INPUT["t"] = time.time()
+        INPUT_WAKE.set()
     hwnd, rect = find_game_window()
     if not hwnd or not rect:
         return {"ok": False, "error": "game window not found"}
@@ -814,6 +852,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
+            if fname in ("index.html", "sw.js"):
+                self.send_header("Cache-Control", "no-cache")
             if fname == "sw.js":
                 self.send_header("Service-Worker-Allowed", "/")
             if fname == "index.html":
@@ -983,6 +1023,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"ok": False, "error": "not found"}, 404)
 
     def do_POST(self):
+        received = time.perf_counter()
         path = self._norm(self.path)
         if not path.startswith("/api/"):
             return self._json({"ok": False, "error": "not found"}, 404)
@@ -1002,7 +1043,15 @@ class Handler(BaseHTTPRequestHandler):
             hwnd, _ = find_game_window()
             return self._json({"ok": bool(hwnd) and focus_window(hwnd)})
         if path == "/api/input":
-            return self._json(handle_input(body))
+            try:
+                result = handle_input(body)
+            finally:
+                with LAT_LOCK:
+                    completed = time.perf_counter()
+                    LAT["post"].append((completed - received) * 1000)
+                    del LAT["post"][:-20]
+                    LAT["pending"] = completed
+            return self._json(result)
         if path == "/api/do":
             result, code = _bridge("POST", "/do", body, 7)
             return self._json(result, code)
