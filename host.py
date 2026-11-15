@@ -9,10 +9,13 @@ import io
 import json
 import os
 import queue
+import socket
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -42,9 +45,10 @@ GAME_PROC = "SlayTheSpire2.exe"
 GAME_TITLE_HINT = "Slay the Spire 2"
 PORT = 8765
 MAX_W = 1152          # stream width cap (px)
+DESIRED_W = 1152      # most recently requested stream width
 JPEG_Q = 62
-JPEG_MAX_BYTES = 90 * 1024   # per-frame size budget; quality steps down to fit
-JPEG_Q_STEPS = (72, 64, 56, 48, 40)
+JPEG_MAX_BYTES = 45 * 1024   # per-frame size budget; quality steps down to fit
+JPEG_Q_STEPS = (64, 56, 48, 40, 32, 24)
 FPS = 15              # capture fps while game is running
 
 def encode_jpeg(img):
@@ -67,12 +71,14 @@ def log(msg):
         pass
     print(line, flush=True)
 
-def load_token():
+def load_token(create=False):
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
             return json.load(f)["token"]
     except Exception:
         pass
+    if not create:
+        return ""
     # First run: create a config with a fresh random token.
     try:
         import secrets
@@ -422,8 +428,9 @@ def capture_loop():
                         img = _wgc_client_image(rect)
                     if img is None:
                         img = ImageGrab.grab(bbox=(l, t, r, b), all_screens=True)
-                    if img.width > MAX_W:
-                        img = img.resize((MAX_W, int(img.height * MAX_W / img.width)), Image.BILINEAR)
+                    target_w = min(img.width, DESIRED_W, MAX_W)
+                    if img.width > target_w:
+                        img = img.resize((target_w, max(1, int(img.height * target_w / img.width))), Image.BILINEAR)
                     # cheap change detection on a thumbnail
                     now = time.time()
                     sig = None
@@ -552,13 +559,13 @@ class AudioHub:
             ff = subprocess.Popen(
                 [ff_path, "-hide_banner", "-loglevel", "error",
                  "-f", "s16le", "-ar", str(rate), "-ac", str(ch), "-i", "-",
-                 "-codec:a", "libmp3lame", "-b:a", "128k",
-                 "-ar", "44100", "-ac", "2", "-f", "mp3", "-"],
+                 "-codec:a", "libmp3lame", "-b:a", "64k",
+                 "-ar", "44100", "-ac", "1", "-f", "mp3", "-"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL)
             self._ffmpeg = ff
             threading.Thread(target=self._broadcast, args=(ff,), daemon=True).start()
-            log("audio started: loopback @%dHz ch=%d -> mp3 128k" % (rate, ch))
+            log("audio started: loopback @%dHz ch=%d -> mp3 64k mono" % (rate, ch))
             while not self.stop_flag:
                 data = stream.read(2048, exception_on_overflow=False)
                 try:
@@ -724,6 +731,26 @@ def handle_input(body):
     return {"ok": False, "error": "unknown input type"}
 
 # ---------------- HTTP ----------------
+def _bridge(method, path, body_obj=None, timeout=6):
+    """Relay only the fixed loopback bridge routes; never synthesize game state."""
+    data = json.dumps(body_obj).encode("utf-8") if body_obj is not None else None
+    req = urllib.request.Request("http://127.0.0.1:8766" + path, data=data,
+                                 headers={"Content-Type": "application/json"}, method=method)
+    try:
+        try:
+            response = urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            code = response.code
+            raw = response.read()
+        try:
+            return json.loads(raw), code
+        except (ValueError, UnicodeError):
+            return {"ok": False, "error": "bridge_bad_response"}, 502
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return {"ok": False, "error": "bridge_unreachable"}, 502
+
 STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -736,6 +763,10 @@ STATIC = {
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+
+    def setup(self):
+        super().setup()
+        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
     def log_message(self, fmt, *args):
         pass
@@ -770,6 +801,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        global DESIRED_W
         path = self._norm(self.path)
         if path in STATIC:
             fname, ctype = STATIC[path]
@@ -797,12 +829,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "unauthorized"}, 401)
             touch_client()
             return self._json(status())
+        if path in ("/api/state", "/api/actions"):
+            if not self._authed():
+                return self._json({"ok": False, "error": "unauthorized"}, 401)
+            result, code = _bridge("GET", path[len("/api"):], None, 6)
+            return self._json(result, code)
         if path == "/api/frame.jpg":
             if not self._authed():
                 return self._json({"ok": False, "error": "unauthorized"}, 401)
             touch_client()
             q = parse_qs(urlparse(self.path).query)
             since = None
+            if "w" in q:
+                try:
+                    DESIRED_W = max(480, min(1152, int(q["w"][0])))
+                except (ValueError, TypeError):
+                    pass
             if "since" in q:
                 try:
                     since = int(q["since"][0])
@@ -961,13 +1003,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": bool(hwnd) and focus_window(hwnd)})
         if path == "/api/input":
             return self._json(handle_input(body))
+        if path == "/api/do":
+            result, code = _bridge("POST", "/do", body, 7)
+            return self._json(result, code)
         return self._json({"ok": False, "error": "not found"}, 404)
 
 def main():
+    global TOKEN
+    if not TOKEN:
+        TOKEN = load_token(create=True)
     if not TOKEN:
         log("WARNING: no token configured")
     threading.Thread(target=capture_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    srv.daemon_threads = True
     log("SpireRemote host listening on 127.0.0.1:%d" % PORT)
     srv.serve_forever()
 
